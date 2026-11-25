@@ -10,12 +10,12 @@ const FEATURES = [
     body: "Visitors bring their own You.com API key. It stays in their browser, rides along per request, and never touches server storage or logs.",
   },
   {
-    title: "Edge proxy included",
-    body: "api.you.com does not serve CORS headers, so this template ships a locked-down /api/you proxy route that runs on Webflow Cloud's edge runtime.",
+    title: "Works before the key",
+    body: "Search and page extraction run on You.com's keyless free tier until a visitor adds a key, so a fresh clone does something real in two commands.",
   },
   {
-    title: "Streaming ready",
-    body: "The proxy passes response bodies straight through, so SSE streams from the Research API reach the browser token by token.",
+    title: "Edge proxy included",
+    body: "api.you.com does not serve CORS headers, so this template ships a locked-down /api/you proxy route on Webflow Cloud's edge runtime. Bodies pass straight through, so Research API SSE streams reach the browser token by token.",
   },
   {
     title: "Webflow Cloud native",
@@ -26,13 +26,13 @@ const FEATURES = [
 const STEPS = [
   {
     n: "1",
-    title: "Get a key",
-    body: "Create a You.com platform account. New accounts include $100 in API credits.",
+    title: "Try it keyless",
+    body: "Run a search and read a page below with no key and no account: 100 queries per day on the free tier.",
   },
   {
     n: "2",
-    title: "Paste it below",
-    body: "Your key is saved in this browser only and attached to each request you make.",
+    title: "Add a key",
+    body: "New accounts include $100 in API credits. Your key is saved in this browser only and unlocks Research and the full API.",
   },
   {
     n: "3",
@@ -95,13 +95,15 @@ export default function Home() {
               How a request flows
             </h3>
             <pre className="mt-4 overflow-x-auto text-xs leading-6 text-muted">
-{`browser (key in localStorage)
-   |  fetch withBase("/api/you/v1/search"), x-api-key header
+{`browser (key in localStorage, or no key in a keyless trial)
+   |  fetch withBase("/api/you/v1/search"), x-api-key header if set
    v
 this app's edge route on Webflow Cloud (Cloudflare Workers)
    |  path allowlist check, key forwarded, nothing stored
-   v
-api.you.com  ->  response streams straight back to the browser`}
+   |
+   |-- key present   ->  api.you.com, response streams straight back
+   |-- no key        ->  api.you.com/mcp/free (search and extract only),
+                         reshaped to the same response body`}
             </pre>
           </div>
         </section>

@@ -5,6 +5,10 @@ import { withBase } from "./utils";
  * /api/you proxy (api.you.com does not serve CORS headers, so direct browser
  * calls are not possible). The visitor's key is attached per request.
  *
+ * search() and extract() also accept a null key. With appConfig.keylessTrial
+ * on, the proxy answers those from You.com's keyless free tier in the same
+ * response shape, so calling code does not branch on the mode.
+ *
  * Response typing is intentionally loose: exact response contracts should be
  * confirmed against https://you.com/docs and tightened per app.
  */
@@ -23,57 +27,127 @@ export class YouApiError extends Error {
   constructor(
     message: string,
     public status: number,
+    /** Stable machine-readable code, when the API or the proxy sent one. */
+    public code?: string,
+    /** True when the same request can succeed on a later try. */
+    public retryable?: boolean,
   ) {
     super(message);
     this.name = "YouApiError";
   }
 }
 
+type ErrorBody = {
+  // A string from this app's proxy, an object from the Extract API.
+  error?: string | { code?: string; message?: string; retryable?: boolean };
+  detail?: string;
+  message?: string;
+  code?: string;
+  retryable?: boolean;
+};
+
 async function request<T>(
   path: string,
-  apiKey: string,
+  apiKey: string | null,
   init: { method?: string; body?: unknown; signal?: AbortSignal } = {},
 ): Promise<T> {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+  };
+  // No key means keyless trial mode; the proxy decides whether to serve it.
+  if (apiKey) headers["x-api-key"] = apiKey;
+
   const res = await fetch(withBase(`/api/you/${path}`), {
     method: init.method ?? "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": apiKey,
-    },
+    headers,
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
     signal: init.signal,
   });
 
   if (!res.ok) {
     let detail = res.statusText || `Request failed (${res.status})`;
+    let code: string | undefined;
+    let retryable: boolean | undefined;
     try {
-      const data = (await res.json()) as { error?: string; detail?: string };
-      detail = data.error ?? data.detail ?? detail;
+      const data = (await res.json()) as ErrorBody;
+      if (typeof data.error === "object" && data.error !== null) {
+        detail = data.error.message ?? detail;
+        code = data.error.code;
+        retryable = data.error.retryable;
+      } else {
+        detail = data.error ?? data.detail ?? data.message ?? detail;
+        code = data.code;
+        retryable = data.retryable;
+      }
     } catch {
       // Non-JSON error body; keep the status text.
     }
-    throw new YouApiError(detail, res.status);
+    throw new YouApiError(detail, res.status, code, retryable);
   }
 
   return (await res.json()) as T;
 }
 
-/** POST /v1/search: real-time, LLM-ready web results. */
+/**
+ * POST /v1/search: real-time, LLM-ready web results.
+ * With a null key (keyless trial) only query, count, offset, freshness,
+ * safesearch, and highlights extraction apply; other fields are ignored.
+ */
 export function search(
-  apiKey: string,
+  apiKey: string | null,
   params: { query: string; [key: string]: unknown },
   signal?: AbortSignal,
 ): Promise<unknown> {
   return request("v1/search", apiKey, { body: params, signal });
 }
 
-/** POST /v1/contents: clean page content for one or more URLs. */
-export function contents(
-  apiKey: string,
-  params: { urls: string[]; [key: string]: unknown },
+// --- Extract API (contract verified against you.com/docs, 2026-11-25) ---
+// Replaces the Contents API, which was deprecated on 2026-11-16.
+
+export type ExtractParams = {
+  /** The webpage or PDF URL to extract. One URL per request. */
+  url: string;
+  /** Defaults to Markdown only. */
+  full_page?: { extraction_formats: Array<"markdown" | "html"> };
+  /** blend (default): cache when available, live crawl otherwise. */
+  extraction_source?: "blend" | "cache" | "fetch";
+  /** Seconds for the whole request, 2 to 100. Default 30. */
+  timeout?: number;
+  /** PDF pages only. standard (default) is billed per page. */
+  parse_effort?: "lite" | "standard";
+};
+
+export type ExtractResult = {
+  url?: string;
+  extraction_source?: string;
+  title?: string;
+  /** Missing when nothing could be extracted, so check before reading. */
+  contents?: { full_page?: { markdown?: string; html?: string } };
+  metadata?: { site_name?: string; favicon_url?: string };
+};
+
+/**
+ * POST /v1/extract: one webpage or PDF as clean Markdown or HTML.
+ * With a null key (keyless trial) only url applies and Markdown comes back.
+ * Errors carry a stable code and a retryable flag on YouApiError: retry only
+ * when retryable is true. On Webflow Cloud keep timeout under the platform's
+ * 20 second request ceiling.
+ */
+export function extract(
+  apiKey: string | null,
+  params: ExtractParams,
   signal?: AbortSignal,
-): Promise<unknown> {
-  return request("v1/contents", apiKey, { body: params, signal });
+): Promise<ExtractResult> {
+  return request("v1/extract", apiKey, {
+    body: apiKey ? params : { url: params.url },
+    signal,
+  });
+}
+
+/** The extracted Markdown, or undefined when the page yielded nothing. */
+export function extractedMarkdown(result: ExtractResult): string | undefined {
+  const markdown = result.contents?.full_page?.markdown;
+  return typeof markdown === "string" && markdown.trim() ? markdown : undefined;
 }
 
 // --- Research API (contract verified against you.com/docs, 2026-08-12) ---
