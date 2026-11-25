@@ -8,4 +8,9 @@ export const appConfig = {
   repoUrl: "https://github.com/brainsparker/you-app-template",
   docsUrl: "https://you.com/docs",
   platformUrl: "https://you.com/platform",
+  // Let visitors run search and page extraction before they add a key, on
+  // You.com's keyless free tier (100 queries per day, counted against this
+  // deployment, not each visitor). Set to false when your app only makes
+  // sense with a key, for example when it is built on the Research API.
+  keylessTrial: true,
 };
